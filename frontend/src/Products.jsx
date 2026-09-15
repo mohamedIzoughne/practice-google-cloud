@@ -4,7 +4,7 @@ export default function Products({ addToCart }) {
   const [products, setProducts] = useState([]);
 
   useEffect(() => {
-    fetch('http://localhost:3005/api/products')
+    fetch('/api/products')
       .then(res => res.json())
       .then(data => setProducts(data))
       .catch(err => console.error("Error fetching products:", err));
@@ -17,7 +17,7 @@ export default function Products({ addToCart }) {
     const formData = new FormData();
     formData.append('image', file);
 
-    fetch(`http://localhost:3005/api/products/${id}/image`, {
+    fetch(`/api/products/${id}/image`, {
       method: 'POST',
       body: formData,
     })

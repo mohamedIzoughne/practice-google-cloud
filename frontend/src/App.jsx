@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Products from './Products';
 import Cart from './Cart';
 import Orders from './Orders';
+import LoadTest from './LoadTest';
 import './index.css';
 
 function App() {
@@ -39,6 +40,13 @@ function App() {
           >
             Dashboard
           </button>
+          <button 
+            className={activeTab === 'loadtest' ? 'active' : ''} 
+            onClick={() => setActiveTab('loadtest')}
+            style={{ color: '#ff6b6b' }}
+          >
+            Load Test
+          </button>
         </nav>
       </header>
 
@@ -52,6 +60,7 @@ function App() {
           />
         )}
         {activeTab === 'orders' && <Orders />}
+        {activeTab === 'loadtest' && <LoadTest />}
       </main>
     </div>
   );

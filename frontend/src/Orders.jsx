@@ -13,7 +13,7 @@ export default function Orders() {
   }, []);
 
   const fetchOrders = () => {
-    fetch('http://localhost:3005/api/orders')
+    fetch('/api/orders')
       .then(res => res.json())
       .then(data => setOrders(data))
       .catch(err => console.error("Error fetching orders:", err));

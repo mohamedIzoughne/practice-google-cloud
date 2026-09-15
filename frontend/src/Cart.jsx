@@ -9,7 +9,7 @@ export default function Cart({ cartItems, clearCart, goToOrders }) {
     if (cartItems.length === 0) return;
     setLoading(true);
 
-    fetch('http://localhost:3005/api/orders', {
+    fetch('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: cartItems, total })
@@ -38,21 +38,21 @@ export default function Cart({ cartItems, clearCart, goToOrders }) {
   return (
     <div className="glass-card" style={{ maxWidth: '600px', margin: '0 auto' }}>
       <h2 style={{ marginBottom: '2rem' }}>Checkout</h2>
-      
+
       {cartItems.map((item, index) => (
         <div key={index} className="order-row">
           <span>{item.name}</span>
           <span>${item.price}</span>
         </div>
       ))}
-      
+
       <div className="order-row" style={{ marginTop: '1rem', borderBottom: 'none', fontWeight: 'bold' }}>
         <span>Total</span>
         <span>${total}</span>
       </div>
 
-      <button 
-        className="btn-primary" 
+      <button
+        className="btn-primary"
         style={{ marginTop: '2rem' }}
         onClick={handleCheckout}
         disabled={loading}
