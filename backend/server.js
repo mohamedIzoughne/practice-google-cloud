@@ -11,7 +11,7 @@ const gcsBucketName = process.env.GCS_BUCKET_NAME;
 
 // Initialize the DB pool globally so we don't open a new pool on every request
 const pool = new Pool({
-  connectionString: process.env.NEON_DATABASE_URL,
+  connectionString: process.env.DATABASE_URL,
   ssl: true
 });
 
@@ -30,7 +30,7 @@ const upload = multer({ storage: storage });
 
 // Initialize database schema
 async function initDB() {
-  if (!process.env.NEON_DATABASE_URL) {
+  if (!process.env.DATABASE_URL) {
     console.log("No DB URL provided. API calls will fail.");
     return;
   }
@@ -198,7 +198,7 @@ app.post('/api/heavy', async (req, res) => {
   let dbTime = 0;
 
   // DB-heavy task (complex JOIN querying all tables in your schema)
-  if (process.env.NEON_DATABASE_URL) {
+  if (process.env.DATABASE_URL) {
     const dbStartTime = Date.now();
     try {
       const client = await pool.connect();
