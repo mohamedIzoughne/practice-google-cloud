@@ -5,6 +5,9 @@ const multer = require('multer');
 const app = express();
 const port = process.env.PORT || 3000;
 const { Pool } = require('pg');
+const { Storage } = require('@google-cloud/storage');
+const storageClient = new Storage();
+const gcsBucketName = process.env.GCS_BUCKET_NAME;
 
 // Initialize the DB pool globally so we don't open a new pool on every request
 const pool = new Pool({
@@ -25,43 +28,100 @@ app.use((req, res, next) => {
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// In-memory data store
-let products = [
-  { id: '1', name: 'Cloud Native T-Shirt', price: 25, imageUrl: 'https://placehold.co/400x400/png?text=T-Shirt' },
-  { id: '2', name: 'K8s Coffee Mug', price: 15, imageUrl: 'https://placehold.co/400x400/png?text=Mug' },
-  { id: '3', name: 'Serverless Hoodie', price: 45, imageUrl: 'https://placehold.co/400x400/png?text=Hoodie' },
-];
-
-let orders = {};
+// Initialize database schema
+async function initDB() {
+  if (!process.env.NEON_DATABASE_URL) {
+    console.log("No DB URL provided. API calls will fail.");
+    return;
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS products (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        price DECIMAL(10, 2) NOT NULL,
+        image_url TEXT
+      );
+      CREATE TABLE IF NOT EXISTS orders (
+        id VARCHAR(50) PRIMARY KEY,
+        total DECIMAL(10, 2) NOT NULL,
+        status VARCHAR(50) DEFAULT 'PENDING',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS order_items (
+        id SERIAL PRIMARY KEY,
+        order_id VARCHAR(50) REFERENCES orders(id) ON DELETE CASCADE,
+        product_id VARCHAR(50) REFERENCES products(id) ON DELETE SET NULL,
+        price DECIMAL(10, 2) NOT NULL
+      );
+    `);
+    
+    const { rows } = await pool.query('SELECT COUNT(*) FROM products');
+    if (parseInt(rows[0].count) === 0) {
+      await pool.query(`
+        INSERT INTO products (id, name, price, image_url) VALUES 
+        ('1', 'Cloud Native T-Shirt', 25, 'https://placehold.co/400x400/png?text=T-Shirt'),
+        ('2', 'K8s Coffee Mug', 15, 'https://placehold.co/400x400/png?text=Mug'),
+        ('3', 'Serverless Hoodie', 45, 'https://placehold.co/400x400/png?text=Hoodie')
+      `);
+    }
+    console.log("Database initialized successfully");
+  } catch (err) {
+    console.error("DB Init Error:", err);
+  }
+}
+initDB();
 
 // Routes
 
 // 1. Get products
-app.get('/api/products', (req, res) => {
-  res.json(products);
+app.get('/api/products', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM products');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 2. Mock image upload for product
-app.post('/api/products/:id/image', upload.single('image'), (req, res) => {
+// 2. Upload image for product to GCS
+app.post('/api/products/:id/image', upload.single('image'), async (req, res) => {
   const productId = req.params.id;
-  const productIndex = products.findIndex(p => p.id === productId);
+  try {
+    const { rows } = await pool.query('SELECT * FROM products WHERE id = $1', [productId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
 
-  if (productIndex === -1) {
-    return res.status(404).json({ error: 'Product not found' });
+    if (!gcsBucketName) {
+      return res.status(500).json({ error: 'GCS_BUCKET_NAME is not configured' });
+    }
+
+    const bucket = storageClient.bucket(gcsBucketName);
+    const fileName = `product-${productId}-${Date.now()}-${req.file.originalname}`;
+    const file = bucket.file(fileName);
+
+    await file.save(req.file.buffer, {
+      contentType: req.file.mimetype,
+      resumable: false
+    });
+
+    const publicUrl = `https://storage.googleapis.com/${gcsBucketName}/${fileName}`;
+    const updated = await pool.query('UPDATE products SET image_url = $1 WHERE id = $2 RETURNING *', [publicUrl, productId]);
+    
+    res.json({ message: 'Image uploaded successfully to GCS', product: updated.rows[0] });
+  } catch (err) {
+    console.error("GCS Upload Error:", err);
+    res.status(500).json({ error: err.message });
   }
-
-  // In a real app (Lab 1.3), this would upload to Cloud Storage and save the URL.
-  // For now, we mock it by returning success.
-  console.log(`Received image upload for product ${productId}. Size: ${req.file ? req.file.size : 0} bytes`);
-
-  // Simulate updating the product image with a random placeholder to show change
-  products[productIndex].imageUrl = `https://placehold.co/400x400/png?text=Updated+${Math.floor(Math.random() * 100)}`;
-
-  res.json({ message: 'Image uploaded successfully (mock)', product: products[productIndex] });
 });
 
 // 3. Create an order
-app.post('/api/orders', (req, res) => {
+app.post('/api/orders', async (req, res) => {
   const { items, total } = req.body;
 
   if (!items || items.length === 0) {
@@ -69,37 +129,52 @@ app.post('/api/orders', (req, res) => {
   }
 
   const orderId = `ORD-${Date.now()}`;
+  const client = await pool.connect();
 
-  const newOrder = {
-    id: orderId,
-    items,
-    total,
-    status: 'PENDING',
-    createdAt: new Date().toISOString()
-  };
+  try {
+    await client.query('BEGIN');
+    await client.query('INSERT INTO orders (id, total, status) VALUES ($1, $2, $3)', [orderId, total, 'PENDING']);
+    for (const item of items) {
+      await client.query('INSERT INTO order_items (order_id, product_id, price) VALUES ($1, $2, $3)', [orderId, item.id, item.price]);
+    }
+    await client.query('COMMIT');
 
-  orders[orderId] = newOrder;
+    // Simulate Async Order Processing Pipeline
+    simulateOrderProcessing(orderId);
 
-  // Simulate Async Order Processing Pipeline
-  simulateOrderProcessing(orderId);
-
-  res.status(201).json(newOrder);
+    res.status(201).json({ id: orderId, total, status: 'PENDING', items });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 // 4. Get all orders
-app.get('/api/orders', (req, res) => {
-  // Return orders sorted by newest first
-  const orderList = Object.values(orders).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  res.json(orderList);
+app.get('/api/orders', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // 5. Get order by ID
-app.get('/api/orders/:id', (req, res) => {
-  const order = orders[req.params.id];
-  if (!order) {
-    return res.status(404).json({ error: 'Order not found' });
+app.get('/api/orders/:id', async (req, res) => {
+  try {
+    const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+    if (orderRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    const itemsRes = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [req.params.id]);
+    const order = orderRes.rows[0];
+    order.items = itemsRes.rows;
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json(order);
 });
 
 // 6. Heavy endpoint for load testing
@@ -130,21 +205,16 @@ app.post('/api/heavy', async (req, res) => {
 
       const query = `
         SELECT 
-            b.title AS board_title,
-            l.title AS list_title,
-            c.title AS card_title,
-            u.name AS assignee_name,
-            COUNT(com.id) AS comment_count,
-            STRING_AGG(t.name, ', ') AS tags
-        FROM boards b
-        LEFT JOIN lists l ON b.id = l.board_id
-        LEFT JOIN cards c ON l.id = c.list_id
-        LEFT JOIN users u ON c.assignee_id = u.id
-        LEFT JOIN comments com ON c.id = com.card_id
-        LEFT JOIN card_tags ct ON c.id = ct.card_id
-        LEFT JOIN tags t ON ct.tag_id = t.id
-        GROUP BY b.id, l.id, c.id, u.id
-        ORDER BY b.created_at DESC, l.position ASC, c.position ASC
+            o.id AS order_id,
+            o.status,
+            o.total,
+            COUNT(oi.id) AS items_count,
+            STRING_AGG(p.name, ', ') AS product_names
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        LEFT JOIN products p ON oi.product_id = p.id
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
         LIMIT 500;
       `;
 
@@ -208,26 +278,24 @@ app.get('/health', (req, res) => {
 // Background simulation of processing
 function simulateOrderProcessing(orderId) {
   // Step 1: Payment processed after 3 seconds
-  setTimeout(() => {
-    if (orders[orderId]) {
-      orders[orderId].status = 'PAYMENT_PROCESSED';
+  setTimeout(async () => {
+    try {
+      await pool.query("UPDATE orders SET status = 'PAYMENT_PROCESSED' WHERE id = $1", [orderId]);
       console.log(`Order ${orderId} -> PAYMENT_PROCESSED`);
 
       // Step 2: Stock reserved after 3 more seconds
-      setTimeout(() => {
-        if (orders[orderId]) {
-          orders[orderId].status = 'STOCK_RESERVED';
-          console.log(`Order ${orderId} -> STOCK_RESERVED`);
+      setTimeout(async () => {
+        await pool.query("UPDATE orders SET status = 'STOCK_RESERVED' WHERE id = $1", [orderId]);
+        console.log(`Order ${orderId} -> STOCK_RESERVED`);
 
-          // Step 3: Shipped after 4 more seconds
-          setTimeout(() => {
-            if (orders[orderId]) {
-              orders[orderId].status = 'SHIPPED';
-              console.log(`Order ${orderId} -> SHIPPED`);
-            }
-          }, 4000);
-        }
+        // Step 3: Shipped after 4 more seconds
+        setTimeout(async () => {
+          await pool.query("UPDATE orders SET status = 'SHIPPED' WHERE id = $1", [orderId]);
+          console.log(`Order ${orderId} -> SHIPPED`);
+        }, 4000);
       }, 3000);
+    } catch (err) {
+      console.error(`Error processing order ${orderId}:`, err);
     }
   }, 3000);
 }
