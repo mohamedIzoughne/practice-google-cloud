@@ -175,6 +175,31 @@ app.post('/api/heavy', async (req, res) => {
   });
 });
 
+// 7. RAM-heavy endpoint for load testing
+app.post('/api/heavy-ram', (req, res) => {
+  const { arraySize = 5000000 } = req.body; // Default 5M elements (roughly 40-50MB per request)
+  const startTime = Date.now();
+  
+  try {
+    // Create a huge array and fill it with strings to consume RAM
+    const hugeArray = new Array(Number(arraySize)).fill('RAM_LOAD_TEST_STRING_TO_CONSUME_MEMORY');
+    
+    // Do a quick operation so it's not optimized away by V8
+    const length = hugeArray.length;
+    
+    const durationMs = Date.now() - startTime;
+    
+    res.json({
+      message: 'RAM load test finished successfully',
+      elementsCreated: length,
+      durationMs
+    });
+  } catch (err) {
+    console.error('RAM Allocation Error:', err);
+    res.status(500).json({ error: 'Failed to allocate memory', details: err.message });
+  }
+});
+
 // Simple health check route
 app.get('/health', (req, res) => {
   res.status(200).send('OK');
