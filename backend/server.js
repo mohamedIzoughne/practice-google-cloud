@@ -1,6 +1,9 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -35,26 +38,8 @@ async function initDB() {
     return;
   }
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS products (
-        id VARCHAR(50) PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        price DECIMAL(10, 2) NOT NULL,
-        image_url TEXT
-      );
-      CREATE TABLE IF NOT EXISTS orders (
-        id VARCHAR(50) PRIMARY KEY,
-        total DECIMAL(10, 2) NOT NULL,
-        status VARCHAR(50) DEFAULT 'PENDING',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE IF NOT EXISTS order_items (
-        id SERIAL PRIMARY KEY,
-        order_id VARCHAR(50) REFERENCES orders(id) ON DELETE CASCADE,
-        product_id VARCHAR(50) REFERENCES products(id) ON DELETE SET NULL,
-        price DECIMAL(10, 2) NOT NULL
-      );
-    `);
+    const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    await pool.query(schemaSql);
     
     const { rows } = await pool.query('SELECT COUNT(*) FROM products');
     if (parseInt(rows[0].count) === 0) {
