@@ -15,7 +15,7 @@ export default function Orders() {
   const fetchOrders = () => {
     fetch('/api/orders')
       .then(res => res.json())
-      .then(data => setOrders(data))
+      .then(data => setOrders(Array.isArray(data) ? data : []))
       .catch(err => console.error("Error fetching orders:", err));
   };
 
@@ -42,7 +42,7 @@ export default function Orders() {
             <div>
               <strong>{order.id}</strong>
               <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                {new Date(order.createdAt).toLocaleString()}
+                {new Date(order.created_at || order.createdAt).toLocaleString()}
               </div>
             </div>
             <span className={`status-badge status-${order.status}`}>
@@ -51,7 +51,7 @@ export default function Orders() {
           </div>
           
           <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-            {order.items.length} item(s) • Total: ${order.total}
+            {order.items ? order.items.length : (order.items_count || 0)} item(s) • Total: ${order.total}
           </div>
         </div>
       ))}

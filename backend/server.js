@@ -15,7 +15,7 @@ const gcsBucketName = process.env.GCS_BUCKET_NAME;
 // Initialize the DB pool globally so we don't open a new pool on every request
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: true
+  ssl: false
 });
 
 app.use(cors());
@@ -40,7 +40,7 @@ async function initDB() {
   try {
     const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
     await pool.query(schemaSql);
-    
+
     const { rows } = await pool.query('SELECT COUNT(*) FROM products');
     if (parseInt(rows[0].count) === 0) {
       await pool.query(`
@@ -77,7 +77,7 @@ app.post('/api/products/:id/image', upload.single('image'), async (req, res) => 
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
     }
-    
+
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
     }
@@ -97,7 +97,7 @@ app.post('/api/products/:id/image', upload.single('image'), async (req, res) => 
 
     const publicUrl = `https://storage.googleapis.com/${gcsBucketName}/${fileName}`;
     const updated = await pool.query('UPDATE products SET image_url = $1 WHERE id = $2 RETURNING *', [publicUrl, productId]);
-    
+
     res.json({ message: 'Image uploaded successfully to GCS', product: updated.rows[0] });
   } catch (err) {
     console.error("GCS Upload Error:", err);
@@ -139,7 +139,13 @@ app.post('/api/orders', async (req, res) => {
 // 4. Get all orders
 app.get('/api/orders', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC');
+    const { rows } = await pool.query(`
+      SELECT o.*, COUNT(oi.id) as items_count 
+      FROM orders o 
+      LEFT JOIN order_items oi ON o.id = oi.order_id 
+      GROUP BY o.id 
+      ORDER BY o.created_at DESC
+    `);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -234,16 +240,16 @@ app.post('/api/heavy', async (req, res) => {
 app.post('/api/heavy-ram', (req, res) => {
   const { arraySize = 5000000 } = req.body; // Default 5M elements (roughly 40-50MB per request)
   const startTime = Date.now();
-  
+
   try {
     // Create a huge array and fill it with strings to consume RAM
     const hugeArray = new Array(Number(arraySize)).fill('RAM_LOAD_TEST_STRING_TO_CONSUME_MEMORY');
-    
+
     // Do a quick operation so it's not optimized away by V8
     const length = hugeArray.length;
-    
+
     const durationMs = Date.now() - startTime;
-    
+
     res.json({
       message: 'RAM load test finished successfully',
       elementsCreated: length,

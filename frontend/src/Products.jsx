@@ -34,13 +34,13 @@ export default function Products({ addToCart }) {
     <div className="grid">
       {products.map(product => (
         <div key={product.id} className="glass-card">
-          <img src={product.imageUrl} alt={product.name} className="product-img" />
+          <img src={product.image_url} alt={product.name} className="product-img" />
           <h3 style={{ marginBottom: '0.5rem' }}>{product.name}</h3>
           <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>${product.price}</p>
           
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
-              Update Image (Mock)
+              Update Image
               <input 
                 type="file" 
                 style={{ display: 'none' }} 
